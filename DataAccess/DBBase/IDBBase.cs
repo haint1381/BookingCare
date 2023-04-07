@@ -30,21 +30,14 @@ namespace BookingCare.Data.DBBase
         Task<bool> Create(T newRecord);
         Task<bool> Create(IEnumerable<T> newRecords);
         Task<bool> Delete(object id);
-        Task<bool> DeleteMany<K>(IEnumerable<K> ids);
         Task<bool> Update(T record);
         Task<bool> Update(IEnumerable<T> records);
-        Task<bool> Update(T record, IEnumerable<string> ignoreFields);
-        Task<bool> Update(IEnumerable<T> records, IEnumerable<string> ignoreFields);
         Task<bool> UpdateFieldsByPrimaryKey(object primaryKeyValue, IDictionary<string, object> updateFields);
-        Task<bool> UpdateFieldsByCondition(IDictionary<string, object> whereFields, IDictionary<string, object> updateFields);
         Task<bool> IsRecordExist(object ID);
         Task<T> GetRecordByID(object id, bool usingReadDB = false);
         Task<IEnumerable<T>> GetRecordByIDs<K>(IEnumerable<K> ids, bool usingReadDB = false);
         Task<long> Count();
         Task<IEnumerable<T>> GetAllRecords(bool usingReadDB = false);
-        Task<IEnumerable<T>> GetAllRecords(int pageIndex, int pageSize);
         Task<IEnumerable<T>> GetAllRecords(RefSqlPaging paging);
-        Task<T> GetRecordIgnoreMappingByID(object id, bool usingReadDB = false);
-        Task<IEnumerable<T>> GetRecordIgnoreMappingByIDs<K>(IEnumerable<K> ids, bool usingReadDB = false);
     }
 }

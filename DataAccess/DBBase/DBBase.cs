@@ -106,25 +106,6 @@ namespace BookingCare.Data.DBBase
             return queries;
         }
 
-        public virtual IEnumerable<Query> CreateQuery(IEnumerable<T> newRecords, IEnumerable<string> ignoreFields)
-        {
-            var queries = new List<Query>();
-
-            if (!newRecords.IsNullOrEmpty())
-            {
-                var dbFilterFields = ignoreFields.IsNullOrEmpty() ? DBFields : DBFields.Where(i => !ignoreFields.Contains(i.Name));
-                var insertFields = IsAutoIncreasementPrimaryKey
-                    ? dbFilterFields.Where(f => f.Name != PrimaryKey).OrderBy(field => field.Name)
-                    : dbFilterFields.OrderBy(field => field.Name);
-                var columns = insertFields.Select(field => field.Name);
-                var data = newRecords.Select(record => insertFields.Select(field => field.GetValue(record)));
-
-                queries.Add(new Query(TableName).AsInsert(columns, data));
-            }
-
-            return queries;
-        }
-
         public virtual IEnumerable<Query> CreateQuery(T newRecord)
         {
             var insertFields = new Dictionary<string, object>();
@@ -452,122 +433,6 @@ namespace BookingCare.Data.DBBase
         #endregion
 
         #region Template Functions
-        protected async Task<bool> CallStoreProcedure(
-            string connectionString,
-            string storeProcedureName,
-            Func<DbCommand, Task> executeSP,
-            Action<Exception> whenException
-        )
-        {
-            var stopWatch = new Stopwatch();
-            var result = true;
-
-            using var connection = databaseHelper.GetConnection(connectionString);
-            try
-            {
-                using var command = databaseHelper.GetCommand(connection);
-                command.CommandText = storeProcedureName;
-                command.CommandType = CommandType.StoredProcedure;
-
-                CheckConnection(connection);
-
-                stopWatch.Start();
-                await executeSP(command);
-                stopWatch.Stop();
-
-            }
-            catch (Exception ex)
-            {
-                if (whenException != null)
-                {
-                    whenException?.Invoke(ex);
-                }
-                else
-                {
-                    logger.LogError(ex, $"CallStoreProcedure[{storeProcedureName}]");
-                }
-
-                result = false;
-            }
-            finally
-            {
-                connection.Close();
-            }
-
-            return result;
-        }
-
-        //protected async Task<bool> CallStoreProcedureWithConnection(
-        //    string storeProcedureName,
-        //    DbConnection connection,
-        //    Func<DbCommand, Task> executeSP,
-        //    Action<Exception> whenException
-        //)
-        //{
-        //    var stopWatch = new Stopwatch();
-        //    var result = true;
-
-        //    try
-        //    {
-        //        using var command = databaseHelper.GetCommand(connection);
-        //        command.CommandText = storeProcedureName;
-        //        command.CommandType = CommandType.StoredProcedure;
-
-        //        CheckConnection(connection);
-
-        //        stopWatch.Start();
-        //        await executeSP(command);
-        //        stopWatch.Stop();
-
-        //        _ = connection.CloseAsync();
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        if (whenException != null)
-        //        {
-        //            whenException?.Invoke(ex);
-        //        }
-        //        else
-        //        {
-        //            logger.LogError(ex, $"CallStoreProcedureWithConnection[{storeProcedureName}]");
-        //        }
-
-        //        result = false;
-        //    }
-
-        //    return result;
-        //}
-
-        protected virtual async Task<bool> RunRawSqlWithTransaction(
-            string connectionString,
-            string sql,
-            Action<Exception, string> whenException
-        )
-        {
-            return await RunSqlTemplate(
-                connectionString,
-                sql,
-                async (connection, command) =>
-                {
-                    command.CommandText = databaseHelper.TransactionIsolationLevel
-                        + databaseHelper.BeginTry
-                        + databaseHelper.BeginTransaction
-                        + command.CommandText
-                        + databaseHelper.CommitTransaction
-                        + databaseHelper.EndTryBeginCatch
-                        + databaseHelper.RaisError
-                        + databaseHelper.EndCatch
-                    ;
-
-                    await command.ExecuteNonQueryAsync();
-                },
-                (exception, sql) =>
-                {
-                    whenException?.Invoke(exception, sql);
-                }
-            );
-        }
-
         protected virtual async Task<bool> RunSqlTemplateWithTransaction(
             string connectionString,
             IEnumerable<Query> queries,
@@ -620,52 +485,6 @@ namespace BookingCare.Data.DBBase
             );
         }
 
-        protected async Task<bool> RunSqlTemplate(
-            string connectionString,
-            string sql,
-            Func<DbConnection, DbCommand, Task> runSqlMethod,
-            Action<Exception, string> whenException
-        )
-        {
-            var stopWatch = new Stopwatch();
-            var result = true;
-
-            using var connection = databaseHelper.GetConnection(connectionString);
-            try
-            {
-                using var command = databaseHelper.GetCommand(connection);
-
-                stopWatch.Start();
-
-                command.CommandText = sql;
-
-                CheckConnection(connection);
-
-                await runSqlMethod(connection, command);
-                stopWatch.Stop();
-
-            }
-            catch (Exception ex)
-            {
-                if (whenException != null)
-                {
-                    whenException?.Invoke(ex, sql);
-                }
-                else
-                {
-                    logger.LogError(ex, $"RunSqlTemplate from  with sql: {sql}");
-                }
-
-                result = false;
-                throw ex;
-            }
-            finally
-            {
-                connection.Close();
-            }
-
-            return result;
-        }
 
         protected async Task<bool> RunSqlTemplate(
             string connectionString,
@@ -722,63 +541,6 @@ namespace BookingCare.Data.DBBase
             return result;
         }
 
-
-
-        protected async Task<bool> RunSqlTemplateWithConnection(
-            IEnumerable<Query> queries,
-            DbConnection connection,
-            Func<DbCommand, Task> runSqlMethod,
-            Action<Exception, string> whenException
-        )
-        {
-            var stopWatch = new Stopwatch();
-            var result = true;
-            var sql = "";
-
-            using var command = databaseHelper.GetCommand(connection);
-            try
-            {
-
-                stopWatch.Start();
-                var compileResult = compiler.Compile(queries);
-
-                command.CommandText += compileResult.Sql;
-
-                if (!compileResult.NamedBindings.IsNullOrEmpty())
-                {
-                    AddParam(command, compileResult.NamedBindings);
-                }
-
-                CheckConnection(connection);
-
-                sql = command.CommandText;
-
-                await runSqlMethod(command);
-                stopWatch.Stop();
-
-            }
-            catch (Exception ex)
-            {
-                if (whenException != null)
-                {
-                    whenException?.Invoke(ex, sql);
-                }
-                else
-                {
-                    logger.LogError(ex, $"RunSqlTemplateWithConnection from  with sql: {sql}");
-                }
-
-                result = false;
-                throw ex;
-            }
-            finally
-            {
-                connection.Close();
-
-            }
-
-            return result;
-        }
         #endregion
 
         #region DB Functions
@@ -802,19 +564,6 @@ namespace BookingCare.Data.DBBase
 
                 return dbFields;
             }
-        }
-
-        public virtual object GetIDFromRecord(T record)
-        {
-            var field = typeOfT.GetField(PrimaryKey);
-            var result = default(object);
-
-            if (field != null)
-            {
-                result = field.GetValue(record);
-            }
-
-            return result;
         }
 
         protected T GetObjectFromDataReader(DbDataReader dr)
@@ -905,29 +654,6 @@ namespace BookingCare.Data.DBBase
             await RunSqlTemplate(
                 connectionString,
                 new Query[] { new Query(TableName) },
-                async (connection, command) =>
-                {
-                    using var dataReader = command.ExecuteReader();
-                    while (await dataReader.ReadAsync())
-                    {
-                        result.Add(GetObjectFromDataReader(dataReader));
-                    }
-                },
-                (exception, sql) =>
-                {
-                    logger.LogError(exception, $"GetAllRecords[{typeOfT.Name}]: {sql}");
-                }
-            );
-
-            return result;
-        }
-
-        public virtual async Task<IEnumerable<T>> GetAllRecords(int pageIndex, int pageSize)
-        {
-            var result = new List<T>();
-            await RunSqlTemplate(
-                ConnectionString,
-                new Query[] { new Query(TableName).ForPage(pageIndex + 1, pageSize) },
                 async (connection, command) =>
                 {
                     using var dataReader = command.ExecuteReader();
@@ -1060,20 +786,6 @@ namespace BookingCare.Data.DBBase
             );
         }
 
-        public virtual async Task<bool> Create(T newRecord, Action<Exception> handleException)
-        {
-            return await RunSqlTemplateWithNoTransaction(
-                ConnectionString,
-                CreateQuery(newRecord),
-                (exception, sql) =>
-                {
-                    handleException(exception);
-                    logger.LogError(exception, $"Create[{typeOfT.Name}]: {sql}");
-                    throw exception;
-                }
-            );
-        }
-
         public virtual async Task<bool> Create(IEnumerable<T> newRecords)
         {
             return await RunSqlTemplateWithTransaction(
@@ -1087,36 +799,11 @@ namespace BookingCare.Data.DBBase
             );
         }
 
-        public virtual async Task<bool> Create(IEnumerable<T> newRecords, IEnumerable<string> ignoreFields)
-        {
-            return await RunSqlTemplateWithTransaction(
-                ConnectionString,
-                CreateQuery(newRecords, ignoreFields),
-                (exception, sql) =>
-                {
-                    logger.LogError(exception, $"Create[{typeOfT.Name}]: {sql}");
-                    throw exception;
-                }
-            );
-        }
-
         public virtual async Task<bool> Delete(object id)
         {
             return await RunSqlTemplateWithTransaction(
                 ConnectionString,
                 DeleteQuery(id),
-                (exception, sql) =>
-                {
-                    logger.LogError(exception, $"Delete[{typeOfT.Name}]: {sql}");
-                }
-            );
-        }
-
-        public virtual async Task<bool> DeleteMany<K>(IEnumerable<K> ids)
-        {
-            return await RunSqlTemplateWithTransaction(
-                ConnectionString,
-                DeleteQueries(ids),
                 (exception, sql) =>
                 {
                     logger.LogError(exception, $"Delete[{typeOfT.Name}]: {sql}");
@@ -1166,48 +853,6 @@ namespace BookingCare.Data.DBBase
             );
         }
 
-        public virtual async Task<bool> Update(T record, IEnumerable<string> ignoreFields)
-        {
-            return await RunSqlTemplateWithNoTransaction(
-                ConnectionString,
-                UpdateQuery(record, ignoreFields),
-                (exception, sql) =>
-                {
-                    logger.LogError(exception, $"Update[{typeOfT.Name}]: {sql}");
-                    throw exception;
-                }
-            );
-        }
-
-        public virtual async Task<bool> Update(IEnumerable<T> records, IEnumerable<string> ignoreFields)
-        {
-            return await RunSqlTemplateWithTransaction(
-                ConnectionString,
-                UpdateQuery(records, ignoreFields),
-                (exception, sql) =>
-                {
-                    logger.LogError(exception, $"Update[{typeOfT.Name}]: {sql}");
-                    throw exception;
-                }
-            );
-        }
-
-        public virtual async Task<bool> UpdateFieldsByCondition(IDictionary<string, object> whereFields, IDictionary<string, object> updateFields)
-        {
-            var updateQuery = new Query(TableName)
-                .Where(new ReadOnlyDictionary<string, object>(whereFields))
-                .AsUpdate(new ReadOnlyDictionary<string, object>(updateFields));
-            return await RunSqlTemplateWithTransaction(
-                ConnectionString,
-                new Query[] { updateQuery },
-                (exception, sql) =>
-                {
-                    logger.LogError(exception, $"UpdateFieldsByCondition[{typeOfT.Name}]: {sql}");
-                    throw exception;
-                }
-            );
-        }
-
         public virtual async Task<bool> IsRecordExist(object ID)
         {
             var result = false;
@@ -1233,18 +878,6 @@ namespace BookingCare.Data.DBBase
         }
         #endregion
 
-        protected bool IsTableNotExist(Exception exception)
-        {
-            foreach (var value in exception.Data.Values)
-            {
-                int.TryParse(value.ToString(), out var errorCode);
-
-                if (errorCode == 1146) return true;
-            }
-
-            return false;
-        }
-
         public string LogQuery(IEnumerable<Query> queries)
         {
             try
@@ -1265,75 +898,6 @@ namespace BookingCare.Data.DBBase
                .AsUpdate(new ReadOnlyDictionary<string, object>(updateFields));
 
             return updateQuery;
-        }
-
-        public async Task<T> GetRecordIgnoreMappingByID(object id, bool usingReadDB = false)
-        {
-            var result = default(T);
-            var query = new Query(TableName).Where(PrimaryKey, id);
-            var connectionString = usingReadDB ? ReadConnectionString : ConnectionString;
-
-            await RunSqlTemplate(
-                connectionString,
-                new Query[] { query },
-                async (connection, command) =>
-                {
-                    using var dataReader = command.ExecuteReader();
-                    while (await dataReader.ReadAsync())
-                    {
-                        result = GetObjectFromDataReader(dataReader);
-                    }
-                },
-                (exception, sql) =>
-                {
-                    logger.LogError(exception, $"GetRecordIgnoreMappingByID[{typeOfT.Name}]: {sql}");
-                }
-            );
-
-            return result;
-        }
-
-        public virtual async Task<IEnumerable<T>> GetRecordIgnoreMappingByIDs<K>(IEnumerable<K> ids, bool usingReadDB = false)
-        {
-            var items = new List<T>();
-
-            if (ids.IsNullOrEmpty())
-            {
-                return items;
-            }
-
-            var query = new Query(TableName);
-
-            if (ids.Count() > 2000)
-            {
-                var strIds = string.Join(";", ids.Distinct());
-
-                query.WithRaw("TBL", $"SELECT [data] as tbl_ID from dbo.nop_splitstring_to_table('{strIds}', ';')")
-                    .WhereRaw($"Exists(SELECT 1 tbl_ID FROM TBL WHERE tbl_ID = {PrimaryKey})");
-            }
-            else
-            {
-                query.WhereIn(PrimaryKey, ids);
-            }
-
-            var res = await RunSqlTemplate(
-                ConnectionString,
-                new Query[] { query },
-                async (connection, command) =>
-                {
-                    using var dataReader = await command.ExecuteReaderAsync();
-
-                    while (await dataReader.ReadAsync())
-                    {
-                        items.Add(ConvertFromDataReaderToObject<T>(dataReader));
-                    }
-                },
-                (exception, sql) =>
-                {
-                    logger.LogError($"GetRecordIgnoreMappingByIDs[{typeOfT.Name}] - {(ids == null ? "null" : string.Join(",", ids))}");
-                }
-            );
-            return items;
         }
     }
 }
